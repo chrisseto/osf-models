@@ -20,7 +20,9 @@ from osf_models.models import RecentlyAddedContributor
 from osf_models.models import StoredFileNode
 from osf_models.models import Tag
 from osf_models.models import TrashedFileNode
+from osf_models.models.base import GuidMixin, ObjectIDMixin, OptionalGuidMixin
 from osf_models.models.contributor import InstitutionalContributor, Contributor, AbstractBaseContributor
+from osf_models.models.node import AbstractNode
 from osf_models.utils.order_apps import get_ordered_models
 
 
@@ -39,17 +41,23 @@ def build_toku_django_lookup_table_cache():
     models.pop(models.index(NotificationSubscription))
 
     lookups = {}
+
     for model in models:
-        lookup_string = 'guid__{}'.format(model.primary_identifier_name)
+        lookup_string = model.primary_identifier_name
         lookup_dict = {x[lookup_string]: x['pk'] for x in model.objects.all().values(lookup_string, 'pk')}
+        if issubclass(model, OptionalGuidMixin):
+            lookup_dict.update({x['guid_string']: x['pk'] for x in
+                                model.objects.filter(guid_string__isnull=False).values('guid_string', 'pk')})
         print('Got {} guids for {}'.format(len(lookup_dict), model._meta.model.__name__))
         lookups.update(lookup_dict)
 
     # add the "special" ones
     lookups.update(
-        {u'{}:not_system'.format(x['name']): x['pk'] for x in Tag.objects.filter(system=False).values('name', 'pk')})
+        {u'{}:not_system'.format(x['name']): x['pk'] for x in
+         Tag.objects.filter(system=False).values('name', 'pk')})
     lookups.update(
-        {u'{}:system'.format(x['name']): x['pk'] for x in Tag.objects.filter(system=True).values('name', 'pk')})
+        {u'{}:system'.format(x['name']): x['pk'] for x in
+         Tag.objects.filter(system=True).values('name', 'pk')})
     lookups.update({x['_id']: x['pk'] for x in CitationStyle.objects.all().values('_id', 'pk')})
     lookups.update({x['_id']: x['pk'] for x in NotificationSubscription.objects.all().values('_id', 'pk')})
     return lookups
@@ -91,19 +99,23 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         models = get_ordered_models()
-        self.modm_to_django = build_toku_django_lookup_table_cache()
+        with ipdb.launch_ipdb_on_exception():
+            self.modm_to_django = build_toku_django_lookup_table_cache()
 
         for django_model in models:
 
             if issubclass(django_model, AbstractBaseContributor) \
                     or django_model is ApiOAuth2Scope or \
-                    hasattr(django_model, 'modm_model_path'):
+                    not hasattr(django_model, 'modm_model_path'):
                 continue
 
             module_path, model_name = django_model.modm_model_path.rsplit('.', 1)
             modm_module = importlib.import_module(module_path)
             modm_model = getattr(modm_module, model_name)
-            modm_queryset = modm_model.find(django_model.modm_query)
+            if isinstance(django_model.modm_query, dict):
+                modm_queryset = modm_model.find(**django_model.modm_query)
+            else:
+                modm_queryset = modm_model.find(django_model.modm_query)
 
             page_size = django_model.migration_page_size
 
@@ -111,9 +123,9 @@ class Command(BaseCommand):
                 self.save_fk_relationships(modm_queryset, django_model, page_size)
                 # self.save_m2m_relationships(modm_queryset, django_model, page_size)
 
-
     def save_fk_relationships(self, modm_queryset, django_model, page_size):
-        print('Starting {} on {}...'.format(sys._getframe().f_code.co_name, django_model._meta.model.__name__))
+        print(
+        'Starting {} on {}...'.format(sys._getframe().f_code.co_name, django_model._meta.model.__name__))
 
         # TODO: Collections is getting user_id added to the bad fields. It shouldn't be.
         # TODO: Comment.root is getting a recursive loop
@@ -136,7 +148,7 @@ class Command(BaseCommand):
 
                     # if an institution has a file, it doesn't
                     if isinstance(django_obj, StoredFileNode) and modm_obj.node is not None and \
-                            modm_obj.node.institution_id is not None:
+                                    modm_obj.node.institution_id is not None:
                         continue
 
                     for field in fk_relations:
@@ -182,7 +194,9 @@ class Command(BaseCommand):
                     django_obj.save()
                     model_count += 1
                     if model_count % page_size == 0 or model_count == model_total:
-                        print('Through {} {}s and {} FKs...'.format(model_count, django_model._meta.model.__name__, fk_count))
+                        print(
+                        'Through {} {}s and {} FKs...'.format(model_count, django_model._meta.model.__name__,
+                                                              fk_count))
                         modm_queryset[0]._cache.clear()
                         modm_queryset[0]._object_cache.clear()
                         print('Took out {} trashes'.format(gc.collect()))
@@ -191,14 +205,15 @@ class Command(BaseCommand):
                 modm_queryset[0]._object_cache.clear()
                 print('Took out {} trashes'.format(gc.collect()))
 
-
     def save_m2m_relationships(self, modm_queryset, django_model, page_size):
-        print('Starting {} on {}...'.format(sys._getframe().f_code.co_name, django_model._meta.model.__name__))
+        print(
+        'Starting {} on {}...'.format(sys._getframe().f_code.co_name, django_model._meta.model.__name__))
         m2m_relations = [(field.attname, field.related_model) for field in django_model._meta.get_fields() if
-                        field.is_relation and not field.auto_created and field.many_to_many]
+                         field.is_relation and not field.auto_created and field.many_to_many]
 
         if len(m2m_relations) == 0:
-            print('{} doesn\'t have any many to many relationships.'.format(django_model._meta.model.__name__))
+            print(
+            '{} doesn\'t have any many to many relationships.'.format(django_model._meta.model.__name__))
             return
         m2m_count = 0
         model_count = 0
@@ -213,13 +228,16 @@ class Command(BaseCommand):
                         try:
                             attr = getattr(django_obj, field_name)
                         except AttributeError:
-                            print('DJANGO: {} doesn\'t have a {} attribute.'.format(django_model._meta.model.__name__, field_name))
+                            print('DJANGO: {} doesn\'t have a {} attribute.'.format(
+                                django_model._meta.model.__name__, field_name))
                             ipdb.set_trace()
 
                         try:
                             value = getattr(modm_obj, field_name, [])
                         except AttributeError:
-                            print('MODM: {} doesn\'t have a {} attribute.'.format(django_model._meta.model.__name__, field_name))
+                            print(
+                            'MODM: {} doesn\'t have a {} attribute.'.format(django_model._meta.model.__name__,
+                                                                            field_name))
                             ipdb.set_trace()
                         else:
                             for item in value:
@@ -237,5 +255,7 @@ class Command(BaseCommand):
                         m2m_count += len(django_pks)
                     model_count += 1
                     if model_count % page_size == 0 or model_count == model_total:
-                        print('Through {} {}s and {} m2m'.format(model_count, django_model._meta.model.__name__, m2m_count))
+                        print(
+                        'Through {} {}s and {} m2m'.format(model_count, django_model._meta.model.__name__,
+                                                           m2m_count))
         print('Done with {} in {} seconds...'.format(sys._getframe().f_code.co_name, (timezone.now())))

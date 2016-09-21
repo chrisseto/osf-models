@@ -56,7 +56,7 @@ from website.util.permissions import (
     WRITE,
     ADMIN,
 )
-from .base import BaseModel, GuidMixin, Guid
+from .base import BaseModel, GuidMixin
 
 logger = logging.getLogger(__name__)
 
@@ -1579,8 +1579,6 @@ class Node(AbstractNode):
         MQ('is_registration', 'eq', False),
         MQ('is_collection', 'eq', False),
     ])
-
-    primary_identifier_name = '_id'
 
     @classmethod
     def migrate_from_modm(cls, modm_obj):

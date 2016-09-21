@@ -1,13 +1,10 @@
 import functools
 import logging
 import os
-from datetime import datetime
 
-import pytz
 import requests
 from dateutil.parser import parse as parse_date
 from django.contrib.contenttypes.fields import GenericForeignKey
-from django.contrib.contenttypes.models import ContentType
 from django.db import models, connection
 from django.utils import timezone
 from framework.analytics import get_basic_counters
@@ -266,7 +263,6 @@ class StoredFileNode(CommentableMixin, OptionalGuidMixin, ObjectIDMixin, BaseMod
         if create and not self.guid.guid:
             self.guid.mint()
         return self.guid
-
 
     class Meta:
         unique_together = [

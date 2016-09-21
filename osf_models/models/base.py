@@ -172,7 +172,6 @@ class Guid(BaseModel):
     """
 
     # TODO DELETE ME POST MIGRATION
-    modm_model_path = 'framework.guid.model.Guid'
     modm_query = None
     migration_page_size = 500000
     # /TODO DELETE ME POST MIGRATION
@@ -308,6 +307,8 @@ class BaseIDMixin(models.Model):
 
 
 class ObjectIDMixin(BaseIDMixin):
+    primary_identifier_name = '_id'
+
     _id = models.CharField(max_length=24, default=generate_object_id, unique=True, db_index=True)
 
     @classmethod
@@ -327,6 +328,10 @@ class InvalidGuid(Exception):
 
 
 class OptionalGuidMixin(BaseIDMixin):
+    """
+    This makes it so that things can **optionally** have guids. Think files.
+    Things that inherit from this must also inherit from ObjectIDMixin ... probably
+    """
     __guid_min_length__ = 5
 
     guids = GenericRelation(Guid, related_name='referent', related_query_name='referents')
@@ -361,6 +366,8 @@ class OptionalGuidMixin(BaseIDMixin):
 
 class GuidMixin(BaseIDMixin):
     __guid_min_length__ = 5
+
+    primary_identifier_name = 'guid_string'
 
     guids = GenericRelation(Guid, related_name='referent', related_query_name='referents')
     guid_string = models.CharField(max_length=255)
