@@ -16,7 +16,6 @@ class NodeLog(ObjectIDMixin, BaseModel):
     # /TODO DELETE ME POST MIGRATION
 
     FIELD_ALIASES = {
-        # this is repeated here because it overrides the one in GuidMixin
         # TODO: Find a better way
         'node': 'node__guids___id',
         'user': 'user__guids___id',

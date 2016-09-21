@@ -7,7 +7,7 @@ import modularodm.exceptions
 import pytz
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.exceptions import ValidationError as DjangoValidationError, MultipleObjectsReturned
 from django.db import models
 from django.db.models.signals import post_save
 from django.dispatch import receiver
@@ -194,10 +194,12 @@ class Guid(BaseModel):
             return None
 
     @classmethod
-    def migrate_from_modm(cls, modm_obj, referent=None):
+    def migrate_from_modm(cls, modm_obj, object_id=None, content_type=None):
         """
         Given a modm Guid make a django Guid
 
+        :param object_id:
+        :param content_type:
         :param modm_obj:
         :return:
         """
@@ -212,12 +214,16 @@ class Guid(BaseModel):
 
         django_obj._id = modm_obj._id
 
-        if referent:
+        if object_id and content_type:
             # if the referent was passed set the GFK to point to it
-            django_obj.content_type = ContentType.objects.get_for_model(referent)
-            django_obj.object_id = referent.pk
+            django_obj.content_type = content_type
+            django_obj.object_id = object_id
 
         return django_obj
+
+    class Meta:
+        ordering = ['-created']
+        get_latest_by = 'created'
 
 
 class BlackListGuid(BaseModel):
@@ -320,10 +326,45 @@ class InvalidGuid(Exception):
     pass
 
 
+class OptionalGuidMixin(BaseIDMixin):
+    __guid_min_length__ = 5
+
+    guids = GenericRelation(Guid, related_name='referent', related_query_name='referents')
+    guid_string = models.CharField(max_length=255, null=True, blank=True)
+    content_type_pk = models.PositiveIntegerField(null=True, blank=True)
+
+    def get_guid(self, create=False):
+        if create:
+            try:
+                guid, created = Guid.objects.get_or_create(
+                    object_id=self.pk,
+                    content_type_pk=ContentType.objects.get_for_model(self).pk
+                )
+            except MultipleObjectsReturned:
+                # lol, hacks
+                pass
+            else:
+                return guid
+        return self.guids.order_by('-created').first()
+
+    @classmethod
+    def migrate_from_modm(cls, modm_obj):
+        instance = super(OptionalGuidMixin, cls).migrate_from_modm(modm_obj)
+        if modm_obj.get_guid():
+            setattr(instance, 'guid_string', modm_obj.get_guid()._id)
+            setattr(instance, 'content_type_pk', ContentType.objects.get_for_model(cls).pk)
+        return instance
+
+    class Meta:
+        abstract = True
+
+
 class GuidMixin(BaseIDMixin):
     __guid_min_length__ = 5
 
     guids = GenericRelation(Guid, related_name='referent', related_query_name='referents')
+    guid_string = models.CharField(max_length=255)
+    content_type_pk = models.PositiveIntegerField()
 
     # TODO: use pre-delete signal to disable delete cascade
 
@@ -364,6 +405,38 @@ class GuidMixin(BaseIDMixin):
     def deep_url(self):
         return None
 
+    @classmethod
+    def migrate_from_modm(cls, modm_obj):
+        """
+        Given a modm object, make a django object with the same local fields.
+
+        This is a base method that may work for simple objects.
+        It should be customized in the child class if it doesn't work.
+
+        :param modm_obj:
+        :return:
+        """
+        django_obj = cls()
+
+        local_django_fields = set(
+            [x.name for x in django_obj._meta.get_fields() if not x.is_relation and x.name != '_id'])
+
+        intersecting_fields = set(modm_obj.to_storage().keys()).intersection(
+            set(local_django_fields))
+
+        for field in intersecting_fields:
+            modm_value = getattr(modm_obj, field)
+            if modm_value is None:
+                continue
+            if isinstance(modm_value, datetime):
+                modm_value = pytz.utc.localize(modm_value)
+            setattr(django_obj, field, modm_value)
+
+        setattr(django_obj, 'guid_string', modm_obj._id)
+        setattr(django_obj, 'content_type_pk', ContentType.objects.get_for_model(cls).pk)
+
+        return django_obj
+
     class Meta:
         abstract = True
 
@@ -372,6 +445,11 @@ class GuidMixin(BaseIDMixin):
 def ensure_guid(sender, instance, created, **kwargs):
     if not issubclass(sender, GuidMixin):
         return False
-    if not instance.guids.exists():
+    if not instance.guids.exists() and instance.guid_string is None:
+        print('Creating a guid for {} with a generated guid'.format(instance.__repr__()))
         Guid.objects.create(object_id=instance.pk, content_type=ContentType.objects.get_for_model(instance),
                             _id=generate_guid(instance.__guid_min_length__))
+    elif not instance.guids.exists() and instance.guid_string is not None:
+        print('Creating a guid for {} with an existing guid'.format(instance.__repr__()))
+        Guid.objects.create(object_id=instance.pk, content_type_id=instance.content_type_pk,
+                            _id=instance.guid_string)

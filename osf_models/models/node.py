@@ -11,6 +11,7 @@ from django.contrib.contenttypes.fields import GenericRelation
 from datetime import datetime
 
 import pytz
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.db.models.signals import post_save, pre_save
@@ -75,7 +76,6 @@ class AbstractNode(TypedModel, AddonModelMixin, GuidMixin, IdentifierMixin,
     primary = True
 
     FIELD_ALIASES = {
-        # this is repeated here because it overrides the one in GuidMixin
         # TODO: Find a better way
         '_id': 'guids___id',
         'contributors': '_contributors',
@@ -1580,26 +1580,21 @@ class Node(AbstractNode):
         MQ('is_collection', 'eq', False),
     ])
 
+    primary_identifier_name = '_id'
+
     @classmethod
     def migrate_from_modm(cls, modm_obj):
         """
-        Given a modm object, make a django object with the same local fields.
+        Given a modm node, make a django object with the same local fields.
 
-        This is a base method that may work for simple objects.
-        It should be customized in the child class if it
-        doesn't work.
         :param modm_obj:
         :return:
         """
-        kwargs = {cls.primary_identifier_name: modm_obj._id}
-        guid, created = Guid.objects.get_or_create(**kwargs)
-        if created:
-            logger.debug('Created a new Guid for {} ({})'.format(modm_obj.__class__.__name__, modm_obj._id))
 
         django_obj = cls()
-        django_obj.guid = guid
+        content_type_pk = ContentType.objects.get_for_model(cls).pk
 
-        bad_names = ['institution_logo_name']
+        bad_names = ['institution_logo_name', '_id']
         local_django_fields = set(
             [x.name for x in django_obj._meta.get_fields() if not x.is_relation and x.name not in bad_names])
 
@@ -1614,6 +1609,8 @@ class Node(AbstractNode):
                 modm_value = pytz.utc.localize(modm_value)
             setattr(django_obj, field, modm_value)
         django_obj._order = 0
+        setattr(django_obj, 'guid_string', modm_obj._id)
+        setattr(django_obj, 'content_type_pk', content_type_pk)
         return django_obj
 
     # /TODO DELETE ME POST MIGRATION

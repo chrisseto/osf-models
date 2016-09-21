@@ -1,21 +1,22 @@
 import functools
 import logging
 import os
+from datetime import datetime
 
+import pytz
 import requests
 from dateutil.parser import parse as parse_date
 from django.contrib.contenttypes.fields import GenericForeignKey
-from django.db import models
+from django.contrib.contenttypes.models import ContentType
+from django.db import models, connection
 from django.utils import timezone
+from framework.analytics import get_basic_counters
 from modularodm.exceptions import NoResultsFound
-from osf_models.models.base import BaseModel, Guid
-from osf_models.models.base import ObjectIDMixin
+from osf_models.models.base import BaseModel, Guid, OptionalGuidMixin, ObjectIDMixin
 from osf_models.models.comment import CommentableMixin
 from osf_models.modm_compat import Q
 from osf_models.utils.base import api_v2_url
 from osf_models.utils.datetime_aware_jsonfield import DateTimeAwareJSONField
-
-from framework.analytics import get_basic_counters
 from website import util
 from website.files import exceptions
 from website.files import utils
@@ -33,7 +34,7 @@ PROVIDER_MAP = {}
 logger = logging.getLogger(__name__)
 
 
-class TrashedFileNode(CommentableMixin, ObjectIDMixin, BaseModel):
+class TrashedFileNode(CommentableMixin, OptionalGuidMixin, ObjectIDMixin, BaseModel):
     """The graveyard for all deleted FileNodes"""
     # TODO DELETE ME POST MIGRATION
     modm_model_path = 'website.files.models.TrashedFileNode'
@@ -68,7 +69,39 @@ class TrashedFileNode(CommentableMixin, ObjectIDMixin, BaseModel):
     @property
     def materialized_path(self):
         if self.provider == 'osfstorage':
-            pass
+            sql = """
+                WITH RECURSIVE
+                    materialized_path_cte(
+                        id
+                        , path
+                        , parent_id
+                        , generated_depth
+                        , generated_path
+                    ) AS (
+                      SELECT
+                        tfn.id
+                        , tfn.path
+                        , tfn.parent_id
+                        , 1::INT AS generated_depth
+                        , tn.path::TEXT AS generated_path
+                      FROM
+                        %s AS tfn
+                      WHERE
+                        tfn.parent_id IS NULL
+                      UNION ALL
+                        SELECT C.id, C.path, C.parent_id, p.generated_depth + 1 AS generated_depth,
+                            (p.path || '/' || c.path::TEXT)
+                        FROM materialized_path_cte AS p, %s AS c
+                        WHERE c.parent_id = p.id
+                    )
+                    SELECT * FROM materialized_path_cte AS n WHERE n.id = %s
+            """
+            with connection.cursor() as cursor:
+                cursor.execute(sql, [self._meta.db_table, self._meta.db_table, self.pk])
+                row = cursor.fetchone()
+                import ipdb
+                ipdb.set_trace()
+                return row[4]
         else:
             return self._materialized_path
 
@@ -139,7 +172,7 @@ class TrashedFileNode(CommentableMixin, ObjectIDMixin, BaseModel):
         return None
 
 
-class StoredFileNode(CommentableMixin, ObjectIDMixin, BaseModel):
+class StoredFileNode(CommentableMixin, OptionalGuidMixin, ObjectIDMixin, BaseModel):
     """
         The storage backend for FileNode objects.
         This class should generally not be used or created manually as FileNode
@@ -229,9 +262,11 @@ class StoredFileNode(CommentableMixin, ObjectIDMixin, BaseModel):
         :param Boolean create: Should we generate a GUID if there isn't one?  Default: False
         :rtype: Guid or None
         """
+        # TODO This is broken
         if create and not self.guid.guid:
             self.guid.mint()
         return self.guid
+
 
     class Meta:
         unique_together = [

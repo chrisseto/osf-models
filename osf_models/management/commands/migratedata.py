@@ -3,61 +3,93 @@ import importlib
 import sys
 
 import ipdb
+from django.contrib.contenttypes.models import ContentType
 from django.core.management import BaseCommand
+from django.db import IntegrityError
+from django.db import connection
 from django.db import transaction
 from django.utils import timezone
-from modularodm import Q as MQ
-from osf_models.models import Guid
-from osf_models.models import NodeLog
-from osf_models.models import NotificationSubscription
-from osf_models.models import Tag
-from osf_models.models.base import GuidMixin
-from osf_models.utils.order_apps import get_ordered_models
-
 from framework.auth.core import User as MODMUser
 from framework.transactions.context import transaction as modm_transaction
-from website.files.models import StoredFileNode
+from modularodm import Q as MQ
+from osf_models.models import NodeLog
+from osf_models.models import Tag
+from osf_models.models.base import GuidMixin, Guid, OptionalGuidMixin, BlackListGuid
+from osf_models.models.node import AbstractNode
+from osf_models.utils.order_apps import get_ordered_models
+from typedmodels.models import TypedModel
+from website.files.models import StoredFileNode as MODMStoredFileNode
 from website.models import Node as MODMNode
+from website.models import Guid as MODMGuid
 
 
-def make_guids(django_model, page_size=20000):
-    print('Starting {} on {}...'.format(sys._getframe().f_code.co_name, django_model._meta.model.__name__))
+def make_guids():
+    print('Starting {}...'.format(sys._getframe().f_code.co_name))
 
-    module_path, model_name = django_model.modm_model_path.rsplit('.', 1)
-    modm_module = importlib.import_module(module_path)
-    modm_model = getattr(modm_module, model_name)
+    guid_models = [model for model in get_ordered_models() if (issubclass(model, GuidMixin) or issubclass(model, OptionalGuidMixin)) and (not issubclass(model, AbstractNode) or model is AbstractNode)]
 
-    count = 0
-    total = modm_model.find(django_model.modm_query).count()
-
-    while count < total:
+    with connection.cursor() as cursor:
         with transaction.atomic():
-            django_objects = list()
-            offset = count
-            limit = (count + page_size) if (count + page_size) < total else total
+            for model in guid_models:
+                content_type = ContentType.objects.get_for_model(model)
+                if issubclass(model, TypedModel):
+                    sql = """
+                            INSERT INTO osf_models_guid
+                                (
+                                    _id,
+                                    object_id,
+                                    created,
+                                    content_type_id
+                                )
+                            SELECT DISTINCT ON (guid_string)
+                              guid_string,
+                              id,
+                              clock_timestamp(),
+                              content_type_pk
+                            FROM
+                              {}_{}
+                            WHERE
+                              guid_string IS NOT NULL AND
+                              content_type_pk IS NOT NULL
+                            ORDER BY
+                              guid_string, type DESC;
+                          """.format(content_type.app_label, content_type.model)
+                else:
+                    sql = """
+                            INSERT INTO osf_models_guid
+                                (
+                                    _id,
+                                    object_id,
+                                    created,
+                                    content_type_id
+                                )
+                            SELECT
+                              guid_string,
+                              id,
+                              clock_timestamp(),
+                              content_type_pk
+                            FROM
+                              {}_{}
+                            WHERE
+                              guid_string IS NOT NULL AND
+                              content_type_pk IS NOT NULL;
+                          """.format(content_type.app_label, content_type.model)
+                print('Making guids for {}'.format(model._meta.model.__name__))
+                try:
+                    cursor.execute(sql)
+                except IntegrityError as ex:
+                    import ipdb
+                    ipdb.set_trace()
 
-            page_of_modm_objects = modm_model.find(django_model.modm_query).sort('-_id')[offset:limit]
+            # TODO make guids for non-existent models
+            missing_guids = set(MODMGuid.find().get_keys()) - set(
+                Guid.objects.all().values_list('_id', flat=True))
+            guids_to_blacklist = []
+            for guid in missing_guids:
+                guids_to_blacklist.append(BlackListGuid(guid=guid))
+            results = BlackListGuid.objects.bulk_create(guids_to_blacklist)
 
-            for modm_obj in page_of_modm_objects:
-                django_objects.append(Guid(**{django_model.primary_identifier_name: modm_obj._id}))
-                count += 1
-                if count % page_size == 0 or count == total:
-                    page_finish_time = timezone.now()
-                    print('Saving Guids for {} {} through {}...'.format(django_model._meta.model.__name__,
-                                                                        count - page_size,
-                                                                        count))
-                    saved = Guid.objects.bulk_create(django_objects)
-                    print('Done with {} {} in {} seconds...'.format(len(saved),
-                                                                    django_model._meta.model.__name__, (
-                                                                        timezone.now() -
-                                                                        page_finish_time).total_seconds()))
-                    modm_obj._cache.clear()
-                    modm_obj._object_cache.clear()
-                    django_objects = []
-                    print('Took out {} trashes'.format(gc.collect()))
-    total = None
-    count = None
-    print('Took out {} trashes'.format(gc.collect()))
+            print('Created {} BlackListGuids from orphaned Guids'.format(len(results)))
 
 
 def save_bare_models(modm_queryset, django_model, page_size=20000):
@@ -151,31 +183,40 @@ def register_nonexistent_models_with_modm():
     :return:
     """
 
-    class DropboxFile(StoredFileNode):
+    class DropboxFile(MODMStoredFileNode):
+        _primary_key = '_id'
         pass
 
-    class OSFStorageGuidFile(StoredFileNode):
+    class OSFStorageGuidFile(MODMStoredFileNode):
+        _primary_key = '_id'
         pass
 
-    class OSFGuidFile(StoredFileNode):
+    class OSFGuidFile(MODMStoredFileNode):
+        _primary_key = '_id'
         pass
 
-    class GithubGuidFile(StoredFileNode):
+    class GithubGuidFile(MODMStoredFileNode):
+        _primary_key = '_id'
         pass
 
-    class NodeFile(StoredFileNode):
+    class NodeFile(MODMStoredFileNode):
+        _primary_key = '_id'
         pass
 
-    class BoxFile(StoredFileNode):
+    class BoxFile(MODMStoredFileNode):
+        _primary_key = '_id'
         pass
 
-    class FigShareGuidFile(StoredFileNode):
+    class FigShareGuidFile(MODMStoredFileNode):
+        _primary_key = '_id'
         pass
 
-    class S3GuidFile(StoredFileNode):
+    class S3GuidFile(MODMStoredFileNode):
+        _primary_key = '_id'
         pass
 
-    class DataverseFile(StoredFileNode):
+    class DataverseFile(MODMStoredFileNode):
+        _primary_key = '_id'
         pass
 
     DataverseFile.register_collection()
@@ -280,7 +321,6 @@ class Command(BaseCommand):
                       '################################################'.format(
                     django_model._meta.model.__name__))
                 continue
-
             module_path, model_name = django_model.modm_model_path.rsplit('.', 1)
             modm_module = importlib.import_module(module_path)
             modm_model = getattr(modm_module, model_name)
@@ -290,13 +330,9 @@ class Command(BaseCommand):
                 modm_queryset = modm_model.find(django_model.modm_query)
 
             with ipdb.launch_ipdb_on_exception():
-                if hasattr(django_model, 'primary_identifier_name') and \
-                        not issubclass(django_model, GuidMixin) and \
-                                django_model is not NotificationSubscription:
-                    if not options['nodelogs']:
-                        make_guids(django_model, page_size=django_model.migration_page_size)
                 if not options['nodelogsguids']:
-                    save_bare_models(modm_queryset, django_model, page_size=django_model.migration_page_size)
+                    save_bare_models(modm_queryset, django_model,
+                                     page_size=django_model.migration_page_size)
             modm_model._cache.clear()
             modm_model._object_cache.clear()
             print('Took out {} trashes'.format(gc.collect()))
@@ -304,3 +340,4 @@ class Command(BaseCommand):
         # Handle system tags, they're on nodes, they need a special migration
         if not options['nodelogs'] and not options['nodelogsguids']:
             save_bare_system_tags()
+        make_guids()

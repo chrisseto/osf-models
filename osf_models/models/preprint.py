@@ -21,6 +21,7 @@ def validate_doi(value):
         raise ValidationValueError('"{}" is not a valid DOI'.format(value))
     return True
 
+
 class Preprint(AbstractNode):
     # TODO DELETE ME POST MIGRATION
     modm_model_path = 'website.project.model.Node'

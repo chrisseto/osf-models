@@ -94,7 +94,6 @@ class OSFUser(DirtyFieldsMixin, GuidMixin, BaseModel,
     # /TODO DELETE ME POST MIGRATION
 
     FIELD_ALIASES = {
-        # this is repeated here because it overrides the one in GuidMixin
         '_id': 'guids___id',
     }
 

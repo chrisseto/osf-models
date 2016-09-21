@@ -1,3 +1,4 @@
+from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres import fields
 from django.core.urlresolvers import reverse
 from django.db import models
@@ -37,9 +38,8 @@ class Institution(Loggable, base.GuidMixin, base.BaseModel):
 
     @classmethod
     def migrate_from_modm(cls, modm_obj):
-        guid, created = Guid.objects.get_or_create(guid=modm_obj._id)
-        inst = Institution()
-        inst.guid = guid
+        inst = cls()
+        content_type_pk = ContentType.objects.get_for_model(cls).pk
         inst.auth_url = modm_obj.institution_auth_url
         inst.banner_name = modm_obj.institution_banner_name
         inst.domains = modm_obj.institution_domains
@@ -49,6 +49,8 @@ class Institution(Loggable, base.GuidMixin, base.BaseModel):
         inst.name = modm_obj.title
         inst.description = modm_obj.description
         inst.is_deleted = modm_obj.is_deleted
+        setattr(inst, 'guid_string', modm_obj._id)
+        setattr(inst, 'content_type_pk', content_type_pk)
         return inst
 
     @property
