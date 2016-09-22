@@ -99,6 +99,7 @@ class OSFUser(DirtyFieldsMixin, GuidMixin, BaseModel,
     modm_query = None
     # /TODO DELETE ME POST MIGRATION
 
+    settings_type = 'user'  # Needed for addons
     USERNAME_FIELD = 'username'
 
     # Node fields that trigger an update to the search engine on save

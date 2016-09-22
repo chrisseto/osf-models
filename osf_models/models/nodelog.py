@@ -107,7 +107,7 @@ class NodeLog(ObjectIDMixin, BaseModel):
     AFFILIATED_INSTITUTION_ADDED = 'affiliated_institution_added'
     AFFILIATED_INSTITUTION_REMOVED = 'affiliated_institution_removed'
 
-    actions = [CHECKED_IN, CHECKED_OUT, FILE_TAG_REMOVED, FILE_TAG_ADDED, CREATED_FROM, PROJECT_CREATED,
+    actions = ([CHECKED_IN, CHECKED_OUT, FILE_TAG_REMOVED, FILE_TAG_ADDED, CREATED_FROM, PROJECT_CREATED,
                PROJECT_REGISTERED, PROJECT_DELETED, NODE_CREATED, NODE_FORKED, NODE_REMOVED,
                NODE_LINK_CREATED, NODE_LINK_FORKED, NODE_LINK_REMOVED, WIKI_UPDATED,
                WIKI_DELETED, WIKI_RENAMED, MADE_WIKI_PUBLIC,
@@ -122,7 +122,9 @@ class NodeLog(ObjectIDMixin, BaseModel):
                RETRACTION_CANCELLED, RETRACTION_INITIATED, REGISTRATION_APPROVAL_CANCELLED,
                REGISTRATION_APPROVAL_INITIATED, REGISTRATION_APPROVAL_APPROVED, PREREG_REGISTRATION_INITIATED,
                CITATION_ADDED, CITATION_EDITED, CITATION_REMOVED,
-               AFFILIATED_INSTITUTION_ADDED, AFFILIATED_INSTITUTION_REMOVED]
+               AFFILIATED_INSTITUTION_ADDED, AFFILIATED_INSTITUTION_REMOVED] + list(sum([
+        config.actions for config in apps.get_app_configs() if config.name.startswith('addons.')
+    ], tuple())))
     action_choices = [(action, action.upper()) for action in actions]
     date = models.DateTimeField(default=timezone.now, db_index=True,
                                 null=True, blank=True)  # auto_now_add=True)
